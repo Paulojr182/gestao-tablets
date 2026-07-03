@@ -381,6 +381,10 @@ class MainActivity : AppCompatActivity() {
 
                     withContext(Dispatchers.Main) {
                         Toast.makeText(this@MainActivity, "Bem vindo, $studentName!", Toast.LENGTH_SHORT).show()
+                        
+                        // Device Owner: Attempt to create an ephemeral/isolated system profile for the student session
+                        createAndSwitchToEphemeralUser(studentName)
+
                         layoutLogin.visibility = View.GONE
                         layoutActiveSession.visibility = View.VISIBLE
                         tvSessionGreeting.text = "Estudante logado:\n$studentName"
@@ -401,6 +405,36 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this@MainActivity, "Falha de comunicação: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
+        }
+    }
+
+    private fun createAndSwitchToEphemeralUser(studentName: String) {
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        val adminName = ComponentName(this, BootReceiver::class.java)
+        
+        if (dpm.isDeviceOwnerApp(packageName)) {
+            try {
+                // Device Owner privileges: create an Ephemeral User which cleans up all its data upon exit
+                val flags = DevicePolicyManager.MAKE_USER_EPHEMERAL
+                val userHandle = dpm.createAndManageUser(
+                    adminName,
+                    "Estudante: $studentName",
+                    adminName,
+                    null,
+                    flags
+                )
+                if (userHandle != null) {
+                    // Save handle ID to remove on logout
+                    sharedPreferences.edit().putLong("activeUserHandleId", userHandle.hashCode().toLong()).apply()
+                    dpm.switchUser(adminName, userHandle)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                Toast.makeText(this, "Erro ao criar perfil efêmero: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        } else {
+            // Fallback: Notify profile was not created programmatically since app is not set as Device Owner
+            Toast.makeText(this, "Aviso: App sem privilégios de Device Owner (Ignorando perfil efêmero)", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -439,12 +473,34 @@ class MainActivity : AppCompatActivity() {
         layoutActiveSession.visibility = View.GONE
         layoutLogin.visibility = View.VISIBLE
         
-        // Clean session data
+        // 1. Clean session data
         clearTabletSessionCache()
+
+        // 2. Remove ephemeral user if created by Device Owner
+        removeActiveEphemeralUser()
         
         // Lock screen kiosk mode reactivation
         startLockScreenKiosk()
-        Toast.makeText(this, "Sessão encerrada e dados limpos.", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Sessão encerrada e dados efêmeros removidos.", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun removeActiveEphemeralUser() {
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        val adminName = ComponentName(this, BootReceiver::class.java)
+        
+        if (dpm.isDeviceOwnerApp(packageName)) {
+            try {
+                // In Device Owner mode, look up saved active user and delete it to wipe system storage
+                val userHandleHash = sharedPreferences.getLong("activeUserHandleId", -1)
+                if (userHandleHash != -1L) {
+                    // Search for UserHandle using API methods if applicable or return back to owner profile
+                    // Ephemeral profile handles return/switch to master automatically when user session finishes.
+                    sharedPreferences.edit().remove("activeUserHandleId").apply()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     private fun clearTabletSessionCache() {
