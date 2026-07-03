@@ -68,6 +68,21 @@ class MainActivity : AppCompatActivity() {
         loadConfiguration()
         startWebSocketConnection()
         startHeartbeatLoop()
+        
+        handleIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        if (intent != null && intent.getBooleanExtra("ACTION_LOGOUT", false)) {
+            // Trigger student session logout when notification is tapped
+            handleStudentLogout()
+        }
     }
 
     private fun setFullScreen() {
@@ -382,8 +397,8 @@ class MainActivity : AppCompatActivity() {
                     withContext(Dispatchers.Main) {
                         Toast.makeText(this@MainActivity, "Bem vindo, $studentName!", Toast.LENGTH_SHORT).show()
                         
-                        // Device Owner: Attempt to create an ephemeral/isolated system profile for the student session
-                        createAndSwitchToEphemeralUser(studentName)
+                        // Show persistent active session notification in status bar
+                        showSessionNotification(studentName)
 
                         layoutLogin.visibility = View.GONE
                         layoutActiveSession.visibility = View.VISIBLE
@@ -408,34 +423,44 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun createAndSwitchToEphemeralUser(studentName: String) {
-        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-        val adminName = ComponentName(this, BootReceiver::class.java)
+    private fun showSessionNotification(studentName: String) {
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val channelId = "student_session_channel"
         
-        if (dpm.isDeviceOwnerApp(packageName)) {
-            try {
-                // Device Owner privileges: create an Ephemeral User which cleans up all its data upon exit
-                val flags = DevicePolicyManager.MAKE_USER_EPHEMERAL
-                val userHandle = dpm.createAndManageUser(
-                    adminName,
-                    "Estudante: $studentName",
-                    adminName,
-                    null,
-                    flags
-                )
-                if (userHandle != null) {
-                    // Save handle ID to remove on logout
-                    sharedPreferences.edit().putLong("activeUserHandleId", userHandle.hashCode().toLong()).apply()
-                    dpm.switchUser(adminName, userHandle)
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                Toast.makeText(this, "Erro ao criar perfil efêmero: ${e.message}", Toast.LENGTH_LONG).show()
-            }
-        } else {
-            // Fallback: Notify profile was not created programmatically since app is not set as Device Owner
-            Toast.makeText(this, "Aviso: App sem privilégios de Device Owner (Ignorando perfil efêmero)", Toast.LENGTH_SHORT).show()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = android.app.NotificationChannel(
+                channelId,
+                "Sessão do Estudante",
+                android.app.NotificationManager.IMPORTANCE_DEFAULT
+            )
+            notificationManager.createNotificationChannel(channel)
         }
+
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("ACTION_LOGOUT", true)
+        }
+        
+        val pendingIntent = android.app.PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            } else {
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT
+            }
+        )
+
+        val notification = androidx.core.app.NotificationCompat.Builder(this, channelId)
+            .setContentTitle("Sessão Ativa")
+            .setContentText("Logado como: $studentName. Toque para sair.")
+            .setSmallIcon(android.R.drawable.ic_menu_info_details)
+            .setOngoing(true) // Prevent swipe-to-delete
+            .setContentIntent(pendingIntent)
+            .build()
+
+        notificationManager.notify(999, notification)
     }
 
     private fun handleStudentLogout() {
@@ -473,33 +498,40 @@ class MainActivity : AppCompatActivity() {
         layoutActiveSession.visibility = View.GONE
         layoutLogin.visibility = View.VISIBLE
         
-        // 1. Clean session data
+        // 1. Clear session and notification
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        notificationManager.cancel(999)
         clearTabletSessionCache()
 
-        // 2. Remove ephemeral user if created by Device Owner
-        removeActiveEphemeralUser()
+        // 2. Kill browsers and other client apps using DeviceOwner privileges to secure session wipe
+        killAllBrowsersAndWorkApps()
         
         // Lock screen kiosk mode reactivation
         startLockScreenKiosk()
-        Toast.makeText(this, "Sessão encerrada e dados efêmeros removidos.", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Sessão encerrada e dados limpos.", Toast.LENGTH_SHORT).show()
     }
 
-    private fun removeActiveEphemeralUser() {
-        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-        val adminName = ComponentName(this, BootReceiver::class.java)
-        
-        if (dpm.isDeviceOwnerApp(packageName)) {
-            try {
-                // In Device Owner mode, look up saved active user and delete it to wipe system storage
-                val userHandleHash = sharedPreferences.getLong("activeUserHandleId", -1)
-                if (userHandleHash != -1L) {
-                    // Search for UserHandle using API methods if applicable or return back to owner profile
-                    // Ephemeral profile handles return/switch to master automatically when user session finishes.
-                    sharedPreferences.edit().remove("activeUserHandleId").apply()
+    private fun killAllBrowsersAndWorkApps() {
+        try {
+            val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            // Force-stop all web browsers to clear session and prevent credentials theft
+            val browsers = arrayOf(
+                "com.android.chrome",
+                "com.sec.android.app.sbrowser",
+                "org.mozilla.firefox",
+                "com.microsoft.emmx",
+                "com.opera.browser"
+            )
+            for (pkg in browsers) {
+                try {
+                    // Kills all active tasks of this app package instantly
+                    activityManager.killBackgroundProcesses(pkg)
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
