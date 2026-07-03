@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+database.sqlite
+.gradle/
+build/
+local.properties
+.idea/
+*.apk
+*.log
+.gemini/
+*.sqlite
