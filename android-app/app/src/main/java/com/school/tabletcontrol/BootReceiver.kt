@@ -1,11 +1,18 @@
 package com.school.tabletcontrol
 
-import android.content.BroadcastReceiver
+import android.app.admin.DeviceAdminReceiver
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 
-class BootReceiver : BroadcastReceiver() {
+class BootReceiver : DeviceAdminReceiver() {
+    override fun onEnabled(context: Context, intent: Intent) {
+        super.onEnabled(context, intent)
+        Toast.makeText(context, "Permissão de Administrador Ativada!", Toast.LENGTH_SHORT).show()
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
+        super.onReceive(context, intent)
         if (Intent.ACTION_BOOT_COMPLETED == intent.action ||
             "android.intent.action.QUICKBOOT_POWERON" == intent.action) {
             
